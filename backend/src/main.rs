@@ -7,6 +7,7 @@
 //! 4. Build [`AppState`] and the Axum router.
 //! 5. Bind the TCP listener and start serving.
 
+mod auth;
 mod config;
 mod errors;
 mod handlers;

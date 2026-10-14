@@ -5,24 +5,25 @@
 //!
 //! ## Route groups
 //!
-//! | Group           | Prefix          | Auth required | Owner        |
-//! |-----------------|-----------------|---------------|--------------|
-//! | Health checks   | `/health`       | No            | Developer 1  |
+//! | Group           | Prefix          | Auth required | Owner           |
+//! |-----------------|-----------------|---------------|-----------------|
+//! | Health checks   | `/health`       | No            | Developer 1     |
 //! | Notifications   | `/api/v1`       | Yes (HMAC)    | Developer 1 + 5 |
 //! | Batches         | `/api/v1`       | Yes (HMAC)    | Developer 1 + 5 |
-//!
-//! Authentication middleware (Task 2) will be layered onto the `/api/v1`
-//! sub-router once it is implemented.  Stub handlers are used for now so
-//! that routing can be tested independently.
 
 use std::sync::Arc;
 
 use axum::{
+    middleware,
     routing::{get, post},
     Router,
 };
 
-use crate::{handlers::health, state::AppState};
+use crate::{
+    auth::middleware::require_hmac_auth,
+    handlers::health,
+    state::AppState,
+};
 
 /// Build and return the complete Axum [`Router`].
 ///
@@ -33,23 +34,22 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/live", get(health::live))
         .route("/ready", get(health::ready));
 
-    // ── API v1 routes (HMAC authentication will be added in Task 2) ──────────
+    // ── API v1 routes (protected by HMAC auth middleware) ────────────────────
     //
-    // Stub handlers are `todo!()` placeholders that return 501 Not Implemented.
-    // Developer 5 will replace batch/notification business logic handlers.
-    // Developer 1 owns routing and auth middleware.
+    // Stub handlers return 501 Not Implemented until Developer 5's business
+    // logic modules are integrated.  Developer 1 owns routing + auth.
     let api_v1_router = Router::new()
-        // Single notification submission — Developer 1 wires auth; business
-        // logic (persisting the notification + job) belongs to Developer 2 & 5.
         .route("/notifications", post(stubs::submit_notification))
-        // Batch submission
         .route("/batches", post(stubs::submit_batch))
-        // Status queries
         .route("/notifications/{id}", get(stubs::get_notification))
         .route("/batches/{id}", get(stubs::get_batch))
         .route("/batches/{id}/notifications", get(stubs::list_batch_notifications))
-        // Cancellation
-        .route("/notifications/{id}/cancel", post(stubs::cancel_notification));
+        .route("/notifications/{id}/cancel", post(stubs::cancel_notification))
+        // Apply HMAC auth to every route in this sub-router.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_hmac_auth,
+        ));
 
     // ── Assemble full router ──────────────────────────────────────────────────
     Router::new()
