@@ -5,6 +5,7 @@ use lettre::{
 
 use super::{
     config::SmtpConfig, error::EmailError, job::EmailJob, message::build_message,
+    outcome::DeliveryOutcome,
 };
 
 fn build_mailer(cfg: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>, EmailError> {
@@ -32,9 +33,30 @@ fn classify(err: SmtpError) -> EmailError {
     }
 }
 
-pub async fn send_email(cfg: &SmtpConfig, job: &EmailJob) -> Result<(), EmailError> {
-    let message = build_message(cfg, job)?;
-    let mailer = build_mailer(cfg)?;
+/// Oru email attempt pannum, epavume DeliveryOutcome return pannum (panic / Err illa)
+pub async fn deliver(cfg: &SmtpConfig, job: &EmailJob) -> DeliveryOutcome {
+    let attempt_number = job.attempt_count + 1;
 
-    mailer.send(message).await.map(|_| ()).map_err(classify)
+    let message = match build_message(cfg, job) {
+        Ok(m) => m,
+        Err(e) => return DeliveryOutcome::failed(job, attempt_number, &e, None),
+    };
+
+    let mailer = match build_mailer(cfg) {
+        Ok(m) => m,
+        Err(e) => return DeliveryOutcome::failed(job, attempt_number, &e, None),
+    };
+
+    match mailer.send(message).await {
+        Ok(response) => {
+            let code = response.code().to_string();
+            let text = response.message().collect::<Vec<_>>().join(" ");
+            DeliveryOutcome::accepted(job, attempt_number, code, text)
+        }
+        Err(e) => {
+            let code = e.status().map(|c| c.to_string());
+            let err = classify(e);
+            DeliveryOutcome::failed(job, attempt_number, &err, code)
+        }
+    }
 }
