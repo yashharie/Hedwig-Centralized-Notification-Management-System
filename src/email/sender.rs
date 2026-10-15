@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use lettre::{
     transport::smtp::{authentication::Credentials, Error as SmtpError},
     AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
@@ -16,7 +18,9 @@ fn build_mailer(cfg: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>, 
         AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.host)
     };
 
-    let mut builder = builder.port(cfg.port);
+    let mut builder = builder
+        .port(cfg.port)
+        .timeout(Some(Duration::from_secs(cfg.timeout_secs)));
 
     if let (Some(user), Some(pass)) = (&cfg.username, &cfg.password) {
         builder = builder.credentials(Credentials::new(user.clone(), pass.clone()));
@@ -29,6 +33,7 @@ fn classify(err: SmtpError) -> EmailError {
     if err.is_permanent() {
         EmailError::Permanent(err.to_string())
     } else {
+        // transient, timeout, connection errors ellam retry pannalam
         EmailError::Temporary(err.to_string())
     }
 }
@@ -47,13 +52,23 @@ pub async fn deliver(cfg: &SmtpConfig, job: &EmailJob) -> DeliveryOutcome {
         Err(e) => return DeliveryOutcome::failed(job, attempt_number, &e, None),
     };
 
-    match mailer.send(message).await {
-        Ok(response) => {
+    // Safety net: Lettre timeout-ku mela, namma own overall timeout
+    let overall = Duration::from_secs(cfg.timeout_secs + 5);
+
+    match tokio::time::timeout(overall, mailer.send(message)).await {
+        Err(_) => {
+            let err = EmailError::Temporary(format!(
+                "SMTP request timed out after {} seconds",
+                overall.as_secs()
+            ));
+            DeliveryOutcome::failed(job, attempt_number, &err, None)
+        }
+        Ok(Ok(response)) => {
             let code = response.code().to_string();
             let text = response.message().collect::<Vec<_>>().join(" ");
             DeliveryOutcome::accepted(job, attempt_number, code, text)
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             let code = e.status().map(|c| c.to_string());
             let err = classify(e);
             DeliveryOutcome::failed(job, attempt_number, &err, code)

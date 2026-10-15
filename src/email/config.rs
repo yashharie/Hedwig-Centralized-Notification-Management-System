@@ -8,6 +8,7 @@ pub struct SmtpConfig {
     pub password: Option<String>,
     pub from: String,
     pub use_tls: bool,
+    pub timeout_secs: u64,
 }
 
 impl SmtpConfig {
@@ -25,6 +26,10 @@ impl SmtpConfig {
             use_tls: env::var("SMTP_USE_TLS")
                 .map(|v| v == "true")
                 .unwrap_or(false),
+            timeout_secs: env::var("SMTP_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
         }
     }
 }
