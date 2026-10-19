@@ -1,4 +1,3 @@
-//! Hedwig — Centralized Notification Management System
 //!
 //! Entry point.  Responsibilities:
 //! 1. Load `.env` (if present) and parse [`Config`].
