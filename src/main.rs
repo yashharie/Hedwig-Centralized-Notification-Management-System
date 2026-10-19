@@ -1,5 +1,4 @@
 mod db;
-mod email;
 
 use db::models::NewDeliveryAttempt;
 use std::env;
