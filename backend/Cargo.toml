@@ -19,9 +19,6 @@ uuid              = { version = "1.16.0", features = ["v4", "serde"] }
 sqlx              = { version = "0.8.5", features = ["runtime-tokio-rustls", "mysql", "uuid", "chrono", "migrate", "macros"] }
 chrono            = { version = "0.4.40", features = ["serde"] }
 thiserror         = "2.0.12"
-utoipa = { version = "6.0.0", features = ["axum_extras", "uuid", "chrono"] }
-http-body-util = "0.1.5"
-subtle = "2.6.1"
 
 [dev-dependencies]
 axum-test-helpers = "0.8.0"
