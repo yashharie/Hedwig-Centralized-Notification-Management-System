@@ -9,16 +9,21 @@
 //! |-----------------|-----------------|---------------|-----------------|
 //! | Health checks   | `/health`       | No            | Developer 1     |
 //! | Notifications   | `/api/v1`       | Yes (HMAC)    | Developer 1 + 5 |
-//! | Batches         | `/api/v1`       | Yes (HMAC)    | Developer 5     |
+//! | Batches         | `/api/v1`       | Yes (HMAC)    | Developer 1 + 5 |
 
 use std::sync::Arc;
 
 use axum::{
+    middleware,
     routing::{get, post},
     Router,
 };
 
-use crate::{handlers::health, state::AppState};
+use crate::{
+    auth::middleware::require_hmac_auth,
+    handlers::health,
+    state::AppState,
+};
 
 /// Build and return the complete Axum [`Router`].
 ///
@@ -29,10 +34,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/live", get(health::live))
         .route("/ready", get(health::ready));
 
-    // ── API v1 routes ─────────────────────────────────────────────────────────
+    // ── API v1 routes (protected by HMAC auth middleware) ─────────────────────
     let api_v1_router = Router::new()
-        // Single notification submission — Developer 1/2 will wire auth and
-        // full business logic; stub returns 501 until then.
+        // Single notification submission (Developer 1/2 — stub until wired)
         .route("/notifications", post(stubs::submit_notification))
         // Batch submission (Developer 5)
         .route("/batches", post(crate::handlers::submission::submit_batch))
@@ -55,7 +59,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/notifications/{id}/cancel",
             post(crate::handlers::batch::cancel_notification),
-        );
+        )
+        // Apply HMAC auth middleware to every route in this sub-router (Developer 1)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_hmac_auth,
+        ));
 
     // ── Assemble full router ──────────────────────────────────────────────────
     Router::new()

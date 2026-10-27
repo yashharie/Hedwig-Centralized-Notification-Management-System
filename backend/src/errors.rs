@@ -8,9 +8,11 @@
 //! ```json
 //! {
 //!   "error": "short_snake_case_code",
-//!   "message": "Human-readable explanation."
+//!   "message": "Human-readable explanation.",
+//!   "fields": [{ "field": "name", "message": "is required" }]
 //! }
 //! ```
+//! The `fields` key is only present for field-level validation errors.
 
 use axum::{
     http::StatusCode,
@@ -19,6 +21,15 @@ use axum::{
 };
 use serde::Serialize;
 use thiserror::Error;
+
+/// A single field-level validation failure.
+#[derive(Debug, Clone, Serialize)]
+pub struct ValidationFieldError {
+    /// The name of the field that failed validation.
+    pub field: String,
+    /// A human-readable description of why the field is invalid.
+    pub message: String,
+}
 
 /// A machine-readable + human-readable error returned by API handlers.
 #[derive(Debug, Error)]
@@ -29,6 +40,9 @@ pub enum ApiError {
 
     #[error("Validation failed: {0}")]
     Validation(String),
+
+    #[error("Validation failed")]
+    ValidationFields(Vec<ValidationFieldError>),
 
     // --- 401 Unauthorized ---
     #[error("Missing or malformed authentication headers")]
@@ -76,6 +90,9 @@ struct ErrorBody {
     error: &'static str,
     /// Human-readable description of what went wrong.
     message: String,
+    /// Per-field validation errors, present only for `ValidationFields` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fields: Option<Vec<ValidationFieldError>>,
 }
 
 impl IntoResponse for ApiError {
@@ -83,6 +100,7 @@ impl IntoResponse for ApiError {
         let (status, code) = match &self {
             ApiError::InvalidPayload(_) => (StatusCode::BAD_REQUEST, "invalid_payload"),
             ApiError::Validation(_) => (StatusCode::BAD_REQUEST, "validation_error"),
+            ApiError::ValidationFields(_) => (StatusCode::BAD_REQUEST, "validation_error"),
             ApiError::MissingAuthHeaders => (StatusCode::UNAUTHORIZED, "missing_auth_headers"),
             ApiError::InvalidSignature => (StatusCode::UNAUTHORIZED, "invalid_signature"),
             ApiError::ExpiredTimestamp => (StatusCode::UNAUTHORIZED, "expired_timestamp"),
@@ -99,16 +117,23 @@ impl IntoResponse for ApiError {
             }
         };
 
-        // Log internal errors with full detail; surface a safe message to clients.
-        let message = match &self {
-            ApiError::Internal(detail) => {
+        // Build the message and optional fields payload.
+        let (message, fields) = match self {
+            ApiError::Internal(ref detail) => {
                 tracing::error!(error_detail = %detail, "Internal server error");
-                "An unexpected error occurred. Please try again later.".to_string()
+                (
+                    "An unexpected error occurred. Please try again later.".to_string(),
+                    None,
+                )
             }
-            other => other.to_string(),
+            ApiError::ValidationFields(ref field_errors) => (
+                "One or more fields failed validation.".to_string(),
+                Some(field_errors.clone()),
+            ),
+            ref other => (other.to_string(), None),
         };
 
-        let body = Json(ErrorBody { error: code, message });
+        let body = Json(ErrorBody { error: code, message, fields });
         (status, body).into_response()
     }
 }
