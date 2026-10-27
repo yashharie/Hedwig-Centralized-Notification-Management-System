@@ -5,24 +5,25 @@
 //!
 //! ## Route groups
 //!
-//! | Group           | Prefix          | Auth required | Owner        |
-//! |-----------------|-----------------|---------------|--------------|
-//! | Health checks   | `/health`       | No            | Developer 1  |
+//! | Group           | Prefix          | Auth required | Owner           |
+//! |-----------------|-----------------|---------------|-----------------|
+//! | Health checks   | `/health`       | No            | Developer 1     |
 //! | Notifications   | `/api/v1`       | Yes (HMAC)    | Developer 1 + 5 |
 //! | Batches         | `/api/v1`       | Yes (HMAC)    | Developer 1 + 5 |
-//!
-//! Authentication middleware (Task 2) will be layered onto the `/api/v1`
-//! sub-router once it is implemented.  Stub handlers are used for now so
-//! that routing can be tested independently.
 
 use std::sync::Arc;
 
 use axum::{
+    middleware,
     routing::{get, post},
     Router,
 };
 
-use crate::{handlers::health, state::AppState};
+use crate::{
+    auth::middleware::require_hmac_auth,
+    handlers::health,
+    state::AppState,
+};
 
 /// Build and return the complete Axum [`Router`].
 ///
@@ -33,24 +34,37 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/live", get(health::live))
         .route("/ready", get(health::ready));
 
-    // ── API v1 routes (HMAC authentication will be added in Task 2) ──────────
-    //
-    // Stub handlers are `todo!()` placeholders that return 501 Not Implemented.
-    // Developer 5 will replace batch/notification business logic handlers.
-    // Developer 1 owns routing and auth middleware.
+    // ── API v1 routes (protected by HMAC auth middleware) ─────────────────────
     let api_v1_router = Router::new()
-        // Single notification submission — Developer 1 wires auth; business
-        // logic (persisting the notification + job) belongs to Developer 2 & 5.
+        // Single notification submission (Developer 1/2 — stub until wired)
         .route("/notifications", post(stubs::submit_notification))
-        // Batch submission
+        // Batch submission (Developer 5)
         .route("/batches", post(crate::handlers::submission::submit_batch))
-        // Status queries
-        .route("/notifications/{id}", get(crate::handlers::notification::get_notification))
-        .route("/notifications/{id}/history", get(crate::handlers::notification::get_delivery_history))
+        // Single-notification status and delivery history (Developer 5)
+        .route(
+            "/notifications/{id}",
+            get(crate::handlers::notification::get_notification),
+        )
+        .route(
+            "/notifications/{id}/history",
+            get(crate::handlers::notification::get_delivery_history),
+        )
+        // Batch status and paginated notification list (Developer 5)
         .route("/batches/{id}", get(crate::handlers::batch::get_batch))
-        .route("/batches/{id}/notifications", get(crate::handlers::batch::list_batch_notifications))
-        // Cancellation
-        .route("/notifications/{id}/cancel", post(crate::handlers::batch::cancel_notification));
+        .route(
+            "/batches/{id}/notifications",
+            get(crate::handlers::batch::list_batch_notifications),
+        )
+        // Notification cancellation (Developer 5)
+        .route(
+            "/notifications/{id}/cancel",
+            post(crate::handlers::batch::cancel_notification),
+        )
+        // Apply HMAC auth middleware to every route in this sub-router (Developer 1)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_hmac_auth,
+        ));
 
     // ── Assemble full router ──────────────────────────────────────────────────
     Router::new()
@@ -61,77 +75,23 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
 // ── Stub handlers ─────────────────────────────────────────────────────────────
 //
-// These stubs return 501 Not Implemented.  They exist so the full route tree
-// compiles and can be tested for routing correctness before business logic
-// modules are integrated.  Replace each stub with the real handler once the
-// owning developer's module is ready.
+// Replace each stub with the real handler once the owning developer's module
+// is ready.  Stubs return 501 Not Implemented so the route tree compiles.
 
 mod stubs {
-    use axum::{extract::Path, http::StatusCode, response::IntoResponse, Json};
+    use axum::{http::StatusCode, response::IntoResponse, Json};
     use serde_json::json;
-    use uuid::Uuid;
 
+    /// `POST /api/v1/notifications`
+    ///
+    /// Owned by Developer 1/2 (single-notification auth + submission flow).
     pub async fn submit_notification() -> impl IntoResponse {
         (
             StatusCode::NOT_IMPLEMENTED,
             Json(json!({
                 "error": "not_implemented",
-                "message": "Notification submission handler not yet connected."
-            })),
-        )
-    }
-
-    pub async fn submit_batch() -> impl IntoResponse {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(json!({
-                "error": "not_implemented",
-                "message": "Batch submission handler not yet connected."
-            })),
-        )
-    }
-
-    pub async fn get_notification(Path(_id): Path<Uuid>) -> impl IntoResponse {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(json!({
-                "error": "not_implemented",
-                "message": "Notification status handler not yet connected."
-            })),
-        )
-    }
-
-    pub async fn get_batch(Path(_id): Path<Uuid>) -> impl IntoResponse {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(json!({
-                "error": "not_implemented",
-                "message": "Batch status handler not yet connected."
-            })),
-        )
-    }
-
-    pub async fn list_batch_notifications(Path(_id): Path<Uuid>) -> impl IntoResponse {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(json!({
-                "error": "not_implemented",
-                "message": "Batch notifications list handler not yet connected."
-            })),
-        )
-    }
-
-    pub async fn cancel_notification(Path(_id): Path<Uuid>) -> impl IntoResponse {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(json!({
-                "error": "not_implemented",
-                "message": "Notification cancellation handler not yet connected."
+                "message": "Single-notification submission handler not yet connected."
             })),
         )
     }
 }
-
-
-
-

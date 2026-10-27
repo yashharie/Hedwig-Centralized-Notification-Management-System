@@ -6,11 +6,14 @@
 //! 4. Build [`AppState`] and the Axum router.
 //! 5. Bind the TCP listener and start serving.
 
+mod auth;
+mod batch;
 mod config;
 mod db;
 mod email;
 mod errors;
 mod handlers;
+mod models;
 mod routes;
 mod state;
 
@@ -58,7 +61,7 @@ async fn main() {
             std::process::exit(1);
         });
 
-    // Run any pending SQLx migrations (Developer 2 will add migration files).
+    // Run any pending SQLx migrations.
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
@@ -68,8 +71,8 @@ async fn main() {
         });
 
     info!("Database connection established and migrations applied.");
-    
-        // ── Email worker (Developer 3) ───────────────────────────────────────────
+
+    // ── Email worker (Developer 3) ────────────────────────────────────────────
     let smtp_cfg = email::config::SmtpConfig::from_env();
     let worker_pool = pool.clone();
     tokio::spawn(async move {
@@ -98,5 +101,3 @@ async fn main() {
             std::process::exit(1);
         });
 }
-
-mod batch;
