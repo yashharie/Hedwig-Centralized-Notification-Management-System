@@ -76,8 +76,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 // ── Stub handlers ─────────────────────────────────────────────────────────────
 //
 // Replace each stub with the real handler once the owning developer's module
-// is ready.  Stubs return 501 Not Implemented so the route tree compiles and
-// can be tested for routing correctness beforehand.
+// is ready.  Stubs return 501 Not Implemented so the route tree compiles.
 
 mod stubs {
     use axum::{http::StatusCode, response::IntoResponse, Json};
