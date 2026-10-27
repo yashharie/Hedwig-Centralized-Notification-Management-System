@@ -1,7 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Returns true if the IP address must NOT be contacted by webhook delivery.
-/// DRAFT policy: to be confirmed with the team.
 pub fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_blocked_ipv4(v4),

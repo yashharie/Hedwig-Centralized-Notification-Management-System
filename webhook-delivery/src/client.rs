@@ -3,20 +3,20 @@ use reqwest::{Client, dns::Resolve, redirect};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// PLACEHOLDER values. Not agreed with the team yet.
+/// Configuration for the webhook HTTP client.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
+    /// Maximum time to wait for a TCP connection to be established.
     pub connect_timeout: Duration,
+    /// Maximum total time for the entire request (connection + transfer).
     pub total_timeout: Duration,
 }
 
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            // PLACEHOLDER: confirm with the team
             connect_timeout: Duration::from_secs(5),
-            // PLACEHOLDER: confirm with the team
-            total_timeout: Duration::from_secs(10),
+            total_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -48,5 +48,12 @@ mod tests {
     #[test]
     fn production_client_builds() {
         assert!(build_production_client(&ClientConfig::default()).is_ok());
+    }
+
+    #[test]
+    fn default_config_has_expected_timeouts() {
+        let cfg = ClientConfig::default();
+        assert_eq!(cfg.connect_timeout, Duration::from_secs(5));
+        assert_eq!(cfg.total_timeout, Duration::from_secs(30));
     }
 }

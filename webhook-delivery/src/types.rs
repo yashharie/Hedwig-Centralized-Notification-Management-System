@@ -1,15 +1,16 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// DRAFT: input from the queue/worker layer. To be aligned with Developer 2's shared types.
-#[derive(Debug, Clone)]
+/// Input from the queue/worker layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookRequest {
     pub job_id: u64,
     pub url: String,
     pub payload: Value,
 }
 
-/// DRAFT: why a delivery failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why a webhook delivery failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureKind {
     InvalidUrl,
     BlockedDestination,
@@ -18,8 +19,8 @@ pub enum FailureKind {
     HttpStatus,
 }
 
-/// DRAFT: structured result returned to the queue/worker layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Structured result returned to the queue/worker layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WebhookOutcome {
     Delivered {
         status: u16,

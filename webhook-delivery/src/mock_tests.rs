@@ -1,5 +1,5 @@
 use crate::client::{ClientConfig, build_client_with_resolver, build_production_client};
-use crate::sender::deliver;
+use crate::sender::{RetryConfig, deliver};
 use crate::types::{FailureKind, WebhookOutcome};
 use reqwest::Client;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
@@ -12,7 +12,10 @@ use url::Url;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// TEST ONLY: resolver without the SSRF check, so loopback mock servers work.
+// ------------------------------------------------------------------
+// TEST ONLY: resolver without the SSRF check so loopback mock servers work.
+// ------------------------------------------------------------------
+
 struct PassResolver;
 
 async fn lookup(host: String) -> Result<Vec<SocketAddr>, BoxError> {
@@ -33,6 +36,10 @@ fn test_client(total_ms: u64) -> Client {
     };
     build_client_with_resolver(&cfg, Arc::new(PassResolver)).unwrap()
 }
+
+// ------------------------------------------------------------------
+// Mock HTTP server helpers
+// ------------------------------------------------------------------
 
 fn http_response(status_line: &str, extra_headers: &str) -> String {
     format!(
@@ -68,19 +75,27 @@ async fn read_request(sock: &mut TcpStream) -> String {
     String::from_utf8_lossy(&buf).to_string()
 }
 
-/// Mock server. `Some(resp)` replies with resp; `None` never replies (timeout test).
-async fn start_server(response: Option<String>) -> (u16, Arc<Mutex<Vec<String>>>) {
+/// Mock server. `responses` is a queue of replies to send in order.
+/// `None` items cause the server to hang (for timeout tests).
+async fn start_server_multi(
+    responses: Vec<Option<String>>,
+) -> (u16, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let seen_srv = seen.clone();
+    let responses = Arc::new(Mutex::new(responses.into_iter()));
     tokio::spawn(async move {
         loop {
             let Ok((mut sock, _)) = listener.accept().await else {
                 break;
             };
             let seen = seen_srv.clone();
-            let response = response.clone();
+            let next = responses.lock().unwrap().next();
+            let response = match next {
+                Some(r) => r,
+                None => break, // no more planned responses
+            };
             tokio::spawn(async move {
                 let req = read_request(&mut sock).await;
                 seen.lock().unwrap().push(req);
@@ -97,9 +112,58 @@ async fn start_server(response: Option<String>) -> (u16, Arc<Mutex<Vec<String>>>
     (port, seen)
 }
 
+/// Convenience wrapper for tests that only need one response.
+async fn start_server(response: Option<String>) -> (u16, Arc<Mutex<Vec<String>>>) {
+    start_server_multi(vec![response]).await
+}
+
 fn local_url(port: u16) -> Url {
     Url::parse(&format!("http://127.0.0.1:{port}/hook")).unwrap()
 }
+
+/// A wrapper around `deliver` that retries using the same logic as
+/// `send_webhook_with_retry` but skips URL/host validation so the raw
+/// `http://` loopback test URLs work.
+async fn deliver_with_retry(
+    client: &Client,
+    url: &Url,
+    payload: &serde_json::Value,
+    cfg: &RetryConfig,
+) -> WebhookOutcome {
+    assert!(cfg.max_attempts >= 1);
+    let mut last = WebhookOutcome::Failed {
+        kind: FailureKind::Connection,
+        status: None,
+        retryable: true,
+        retry_after_secs: None,
+    };
+    for attempt in 0..cfg.max_attempts {
+        last = deliver(client, url, payload).await;
+        match &last {
+            WebhookOutcome::Delivered { .. } => return last,
+            WebhookOutcome::Failed { retryable, retry_after_secs, .. } => {
+                if !retryable || attempt + 1 == cfg.max_attempts {
+                    break;
+                }
+                let multiplier = 1u64.checked_shl(attempt).unwrap_or(u64::MAX);
+                let backoff_secs = cfg
+                    .base_delay
+                    .as_secs()
+                    .saturating_mul(multiplier)
+                    .min(cfg.max_delay.as_secs());
+                let wait_secs = retry_after_secs
+                    .map(|ra| ra.max(backoff_secs))
+                    .unwrap_or(backoff_secs);
+                tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+            }
+        }
+    }
+    last
+}
+
+// ------------------------------------------------------------------
+// Single-shot delivery tests
+// ------------------------------------------------------------------
 
 #[tokio::test]
 async fn success_200_is_delivered() {
@@ -109,7 +173,7 @@ async fn success_200_is_delivered() {
 }
 
 #[tokio::test]
-async fn status_404_is_draft_not_retryable() {
+async fn status_404_is_not_retryable() {
     let (port, _) = start_server(Some(http_response("404 Not Found", ""))).await;
     let out = deliver(&test_client(2000), &local_url(port), &serde_json::json!({})).await;
     assert!(matches!(
@@ -140,7 +204,7 @@ async fn status_429_keeps_retry_after() {
 }
 
 #[tokio::test]
-async fn status_503_is_draft_retryable() {
+async fn status_503_is_retryable() {
     let (port, _) = start_server(Some(http_response("503 Service Unavailable", ""))).await;
     let out = deliver(&test_client(2000), &local_url(port), &serde_json::json!({})).await;
     assert!(matches!(
@@ -226,4 +290,101 @@ async fn safe_resolver_blocks_localhost() {
             ..
         }
     ));
+}
+
+// ------------------------------------------------------------------
+// Retry loop integration tests
+// ------------------------------------------------------------------
+
+/// Server fails twice with 503 then succeeds on the third attempt.
+/// The retry loop should return Delivered on the third attempt.
+#[tokio::test]
+async fn retry_succeeds_after_transient_failures() {
+    let responses = vec![
+        Some(http_response("503 Service Unavailable", "")),
+        Some(http_response("503 Service Unavailable", "")),
+        Some(http_response("200 OK", "")),
+    ];
+    let (port, seen) = start_server_multi(responses).await;
+
+    let cfg = RetryConfig {
+        max_attempts: 5,
+        base_delay: Duration::from_millis(10), // fast for tests
+        max_delay: Duration::from_millis(50),
+    };
+    let client = test_client(2000);
+    let url = local_url(port);
+    let out = deliver_with_retry(&client, &url, &serde_json::json!({}), &cfg).await;
+
+    assert!(
+        matches!(out, WebhookOutcome::Delivered { status: 200 }),
+        "expected Delivered, got {out:?}"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 3, "expected exactly 3 attempts");
+}
+
+/// Server always returns 503. After max_attempts the loop gives up.
+#[tokio::test]
+async fn retry_exhausted_returns_last_failure() {
+    let responses: Vec<Option<String>> = (0..3)
+        .map(|_| Some(http_response("503 Service Unavailable", "")))
+        .collect();
+    let (port, seen) = start_server_multi(responses).await;
+
+    let cfg = RetryConfig {
+        max_attempts: 3,
+        base_delay: Duration::from_millis(10),
+        max_delay: Duration::from_millis(50),
+    };
+    let client = test_client(2000);
+    let url = local_url(port);
+    let out = deliver_with_retry(&client, &url, &serde_json::json!({}), &cfg).await;
+
+    assert!(
+        matches!(
+            out,
+            WebhookOutcome::Failed {
+                kind: FailureKind::HttpStatus,
+                status: Some(503),
+                retryable: true,
+                ..
+            }
+        ),
+        "expected Failed(503), got {out:?}"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 3, "expected exactly 3 attempts");
+}
+
+/// A 404 is a permanent failure — retry loop must stop after the first attempt.
+#[tokio::test]
+async fn retry_does_not_retry_permanent_failures() {
+    let responses = vec![Some(http_response("404 Not Found", ""))];
+    let (port, seen) = start_server_multi(responses).await;
+
+    let cfg = RetryConfig {
+        max_attempts: 5,
+        base_delay: Duration::from_millis(10),
+        max_delay: Duration::from_millis(50),
+    };
+    let client = test_client(2000);
+    let url = local_url(port);
+    let out = deliver_with_retry(&client, &url, &serde_json::json!({}), &cfg).await;
+
+    assert!(
+        matches!(
+            out,
+            WebhookOutcome::Failed {
+                kind: FailureKind::HttpStatus,
+                status: Some(404),
+                retryable: false,
+                ..
+            }
+        ),
+        "expected Failed(404) non-retryable, got {out:?}"
+    );
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "should have made exactly 1 attempt for a permanent failure"
+    );
 }

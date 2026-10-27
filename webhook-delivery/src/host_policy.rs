@@ -13,8 +13,8 @@ pub enum HostError {
 
 /// Checks the host part of an already parsed URL.
 /// IP literals are checked with the IP policy; domain names are checked against
-/// a small list of internal names (DRAFT policy: to be confirmed with the team).
-/// Domain names that RESOLVE to blocked IPs must be handled at connection time.
+/// a list of internal names that must not be reachable via webhooks.
+/// Domain names that RESOLVE to blocked IPs are handled at connection time by `SafeResolver`.
 pub fn check_host(url: &Url) -> Result<(), HostError> {
     match url.host() {
         Some(Host::Ipv4(ip)) => check_ip(IpAddr::V4(ip)),
