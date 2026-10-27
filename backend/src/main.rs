@@ -9,6 +9,8 @@
 mod auth;
 mod batch;
 mod config;
+mod db;
+mod email;
 mod errors;
 mod handlers;
 mod models;
@@ -69,6 +71,14 @@ async fn main() {
         });
 
     info!("Database connection established and migrations applied.");
+
+    // ── Email worker (Developer 3) ────────────────────────────────────────────
+    let smtp_cfg = email::config::SmtpConfig::from_env();
+    let worker_pool = pool.clone();
+    tokio::spawn(async move {
+        info!("Email worker started");
+        email::worker::run_worker(&worker_pool, &smtp_cfg, "email-worker-1").await;
+    });
 
     // ── 5. Build application state and router ────────────────────────────────
     let state: Arc<AppState> = AppState::new(config, pool);
